@@ -14,7 +14,7 @@ sns_client = boto3.client('sns')
 # 환경 변수에서 설정 값 불러오기
 SNS_TOPIC_ARN = os.environ.get('SNS_TOPIC_ARN')
 GEMINI_API_KEY_PARAMETER_NAME = os.environ.get('GEMINI_API_KEY_PARAMETER_NAME')
-LOKI_URL = os.environ.get('LOKI_URL', 'http://loki.internal.snorose.com:3100')
+LOKI_URL = os.environ.get('LOKI_URL')
 
 # 분석할 로그 그룹 이름들
 LOKI_JOB_LABELS_TO_ANALYZE = ['springboot-app-logs', 'codedeploy-agent-logs']
