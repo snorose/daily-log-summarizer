@@ -1,0 +1,74 @@
+name: Deploy to Lambda (ECR)
+
+on:
+  push:
+    branches: [ "main" ]
+
+# OIDC 인증을 위한 권한 설정
+permissions:
+  id-token: write 
+  contents: read
+
+jobs:
+  deploy:
+    name: Build, Push to ECR, and Deploy to Lambda
+    runs-on: ubuntu-latest
+
+    # 운영 환경에서만 사용
+    environment: PROD
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # AWS 자격 증명 설정
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ vars.AWS_ROLE_ARN }} 
+        aws-region: ${{ vars.AWS_REGION }}
+
+    # Amazon ECR 로그인
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    # Docker 이미지 빌드 및 푸시
+    - name: Build, tag, and push image to Amazon ECR
+      id: build-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY_NAME }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest -f Dockerfile .
+        
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        
+        echo "image_uri=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+    # Lambda 함수 업데이트
+    - name: Deploy new image to AWS Lambda
+      run: |
+        aws lambda update-function-code \
+          --function-name ${{ vars.LAMBDA_FUNCTION_NAME }} \
+          --image-uri ${{ steps.build-image.outputs.image_uri }}
+
+    # 코드 업데이트가 완료될 때까지 대기
+    - name: Wait for Lambda function update to complete
+      run: |
+        aws lambda wait function-updated \
+          --function-name ${{ vars.LAMBDA_FUNCTION_NAME }}
+
+    # Lambda 환경 변수 설정
+    - name: Update Lambda Environment Variables
+      run: |
+        aws lambda update-function-configuration \
+          --function-name ${{ vars.LAMBDA_FUNCTION_NAME }} \
+          --environment "Variables={ \
+            SNS_TOPIC_ARN=${{ vars.SNS_TOPIC_ARN }}, \
+            GEMINI_API_KEY_PARAMETER_NAME=${{ vars.GEMINI_API_KEY_PARAMETER_NAME }}, \
+            LOKI_URL=${{ vars.LOKI_URL }}, \
+            TZ='Asia/Seoul' \
+          }"
