@@ -21,6 +21,8 @@ daily-log-summarizer는 AWS 인프라와 Upstage Solar LLM을 결합하여 실�
 - Privacy First: LLM 전송 전 민감 정보를 자동으로 [REDACTED] 처리하여 보안 가이드라인을 준수합니다.
 - Fully Automated: Docker 기반의 ECR 배포와 GitHub Actions CI/CD를 통해 인프라 관리를 자동화했습니다.
 
+<br>
+
 ## Tech Stack
 
 - Language: Python 3.12
