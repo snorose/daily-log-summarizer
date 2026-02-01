@@ -3,9 +3,10 @@ import boto3
 import os
 import datetime
 import requests
-import google.generativeai as genai
+# import google.generativeai as genai
 import re
 from datetime import timezone, timedelta
+from openai import OpenAI
 
 # AWS 클라이언트 초기화
 ssm_client = boto3.client('ssm')
@@ -13,52 +14,32 @@ sns_client = boto3.client('sns')
 
 # 환경 변수에서 설정 값 불러오기
 SNS_TOPIC_ARN = os.environ.get('SNS_TOPIC_ARN')
-GEMINI_API_KEY_PARAMETER_NAME = os.environ.get('GEMINI_API_KEY_PARAMETER_NAME')
+UPSTAGE_API_KEY_PARAMETER_NAME = os.environ.get('UPSTAGE_API_KEY_PARAMETER_NAME')
+# GEMINI_API_KEY_PARAMETER_NAME = os.environ.get('GEMINI_API_KEY_PARAMETER_NAME')
 LOKI_URL = os.environ.get('LOKI_URL')
 
 # 분석할 로그 그룹 이름들
 LOKI_JOB_LABELS_TO_ANALYZE = ['springboot-app-logs', 'codedeploy-agent-logs']
 
 # Gemini API 키 로드
-def get_gemini_api_key():
+def get_api_key():
     try:
-        response = ssm_client.get_parameter(Name=GEMINI_API_KEY_PARAMETER_NAME, WithDecryption=True)
+        response = ssm_client.get_parameter(Name=UPSTAGE_API_KEY_PARAMETER_NAME, WithDecryption=True)
         return response['Parameter']['Value']
     except Exception as e:
-        print(f"Error retrieving Gemini API Key: {e}")
+        print(f"Error retrieving API Key: {e}")
         raise e
 
 # === 전문가용 Gemini 설정 시작 ===
 
-# 1. Gemini API 설정 및 시스템 프롬프트
-GEMINI_API_KEY = get_gemini_api_key()
-genai.configure(api_key=GEMINI_API_KEY)
-
-model = genai.GenerativeModel(
-    model_name='gemini-flash-latest',
-    system_instruction="""
-당신은 SRE 팀을 위한 로그 분석 AI입니다.
-목표: 주어진 로그만으로 사건(incident)을 감지하고, 유사 로그를 하나로 묶어(지문/패턴) 요약하며, 영향도·가설·다음 조치·조회용 질의를 제시합니다.
-규칙:
-- 외부 지식 추정 금지. 주어진 로그 범위 내에서만 판단.
-- 불확실하면 "불확실"로 표기하고 confidence를 낮게 설정.
-- 엔터티 정규화: service, env, region, host, error_code.
-- 지문(fingerprint)은 변수값 마스킹(예: ID/IP 등) 후 간결하게.
-- 샘플 로그(sample_logs)는 3개 이하, 비밀키/토큰/개인정보는 마스킹.
-- 반드시 제공된 JSON 스키마로만 응답. 주석/설명/추가 텍스트 금지.
-- 한국어로 작성.
-""".strip()
+# 1. Upstage 클라이언트 초기화
+UPSTAGE_API_KEY = get_api_key()
+client = OpenAI(
+    api_key=UPSTAGE_API_KEY,
+    base_url="https://api.upstage.ai/v1"
 )
 
-# 2. 일관된 출력을 위한 생성 설정 (genai.types 사용)
-GEN_CONFIG = genai.types.GenerationConfig(
-    temperature=0.2,
-    top_p=0.9,
-    max_output_tokens=2048,
-    response_mime_type="application/json"
-)
-
-# 3. JSON 출력 스키마 정의
+# 2. JSON 출력 스키마 정의
 JSON_SCHEMA = {
   "type":"object",
   "properties":{
@@ -70,25 +51,54 @@ JSON_SCHEMA = {
   "required":["time_window","incidents","summary_md","confidence_overall"]
 }
 
-# 4. Gemini 호출 및 재시도 로직 함수
-def call_gemini_json(prompt: str) -> str:
+# 3. 시스템 프롬프트 구성 (JSON 스키마를 텍스트로 포함)
+SYSTEM_INSTRUCTION = f"""
+당신은 SRE 팀을 위한 로그 분석 AI입니다.
+목표: 주어진 로그만으로 사건(incident)을 감지하고, 유사 로그를 하나로 묶어(지문/패턴) 요약하며, 영향도·가설·다음 조치·조회용 질의를 제시합니다.
+
+규칙:
+- 외부 지식 추정 금지. 주어진 로그 범위 내에서만 판단.
+- 불확실하면 "불확실"로 표기하고 confidence를 낮게 설정.
+- 엔터티 정규화: service, env, region, host, error_code.
+- 지문(fingerprint)은 변수값 마스킹(예: ID/IP 등) 후 간결하게.
+- 샘플 로그(sample_logs)는 3개 이하, 비밀키/토큰/개인정보는 마스킹.
+- 한국어로 작성.
+
+[중요] 반드시 다음 JSON 형식을 준수하여 응답해야 합니다:
+{json.dumps(JSON_SCHEMA, ensure_ascii=False)}
+"""
+
+# 4. Upstage 호출 함수
+def call_upstage_json(prompt: str) -> str:
     try:
-        resp = model.generate_content(
-            prompt,
-            generation_config=GEN_CONFIG,
-            # response_schema 인자를 사용하여 JSON 형식 강제
-            **({"response_schema": JSON_SCHEMA})
+        response = client.chat.completions.create(
+            model="solar-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"}, # JSON 모드 강제
+            temperature=0.2,
+            stream=False 
         )
-        return resp.text
+        return response.choices[0].message.content
     except Exception as e:
-        print(f"Initial Gemini call failed: {e}. Retrying...")
-        # 재시도 시에는 더 강력한 지시 추가
-        retry_prompt = prompt + "\n\n주의: 반드시 유효한 JSON 형식으로만 응답해야 합니다. 다른 텍스트나 주석은 절대 포함하지 마세요."
-        resp = model.generate_content(
-            retry_prompt,
-            generation_config=GEN_CONFIG
-        )
-        return resp.text
+        print(f"Initial API call failed: {e}. Retrying...")
+        # 재시도 로직
+        try:
+            retry_prompt = prompt + "\n\n주의: 반드시 유효한 JSON 형식으로만 응답해야 합니다."
+            response = client.chat.completions.create(
+                model="solar-mini",
+                messages=[
+                    {"role": "system", "content": SYSTEM_INSTRUCTION},
+                    {"role": "user", "content": retry_prompt}
+                ],
+                response_format={"type": "json_object"}
+            )
+            return response.choices[0].message.content
+        except Exception as retry_e:
+             print(f"Retry failed: {retry_e}")
+             raise retry_e
 
 # 5. 유저 프롬프트 생성 함수
 def build_user_prompt(from_iso, to_iso, logs_chunk):
@@ -100,7 +110,7 @@ def build_user_prompt(from_iso, to_iso, logs_chunk):
 - 기간: {from_iso} ~ {to_iso}
 - 알려진 변경: 없음
 
-다음은 로그입니다. 반드시 JSON 스키마로만 응답하세요.
+다음 로그를 분석해주세요:
 
 ---LOGS START---
 {logs_chunk}
@@ -119,12 +129,11 @@ def mask_secrets(text: str) -> str:
         text = pat.sub('[REDACTED]', text)
     return text
 
-# === 전문가용 Gemini 설정 끝 ===
-
+# === Upstage 설정 끝 ===
 
 def lambda_handler(event, context):
     try:
-        # 7. 안정적인 KST 시간 계산 로직
+        # 7. 안정적인 KST 시간 계산
         KST = timezone(timedelta(hours=9))
         now_utc = datetime.datetime.now(timezone.utc)
         now_kst = now_utc.astimezone(KST)
@@ -146,9 +155,16 @@ def lambda_handler(event, context):
         end_time_ns = int(now_utc.timestamp() * 1e9)
 
         all_error_logs = [
-             "[2025-02-01 14:05:10] ERROR s.s.g.security.LogFilter - Database connection failed: Connection timed out",
-             "[2025-02-01 14:05:12] ERROR s.s.g.security.LogFilter - HikariPool-1 - Connection is not available, request timed out after 30000ms",
-             "[2025-02-01 14:06:00] ERROR s.s.g.controller.UserController - Failed to fetch user data: 500 Internal Server Error"
+            "[2025-02-01 14:05:01] ERROR o.a.c.c.C.[Tomcat].[localhost] - Servlet.service() for servlet [dispatcherServlet] threw exception",
+            "[2025-02-01 14:05:01] ERROR o.s.b.w.s.ErrorPageFilter - Forwarding to error page from request [/api/users/me] due to exception",
+            "[2025-02-01 14:05:01] ERROR o.h.e.jdbc.spi.SqlExceptionHelper - SQL Error: 0, SQLState: 08001",
+            "[2025-02-01 14:05:01] ERROR o.h.e.jdbc.spi.SqlExceptionHelper - Communications link failure",
+            "[2025-02-01 14:05:01] ERROR c.z.h.HikariPool - HikariPool-1 - Connection is not available, request timed out after 30000ms",
+            "[2025-02-01 14:05:05] FATAL c.z.h.HikariPool - HikariPool-1 - Pool is exhausted, shutting down",
+            "[2025-02-01 14:05:06] ERROR o.s.b.SpringApplication - Application run failed",
+            "[2025-02-01 14:05:06] ERROR o.s.b.d.LoggingFailureAnalysisReporter - APPLICATION FAILED TO START",
+            "[2025-02-01 14:05:06] ERROR o.s.b.d.LoggingFailureAnalysisReporter - Description: Failed to initialize database connection",
+            "[2025-02-01 14:05:06] ERROR o.s.b.d.LoggingFailureAnalysisReporter - Action: Check database availability and credentials"
         ]
         
         include_keywords = "ERROR|failed|500|Exception"
