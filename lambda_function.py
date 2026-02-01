@@ -35,7 +35,7 @@ GEMINI_API_KEY = get_gemini_api_key()
 genai.configure(api_key=GEMINI_API_KEY)
 
 model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash-latest',
+    model_name='gemini-flash-latest',
     system_instruction="""
 당신은 SRE 팀을 위한 로그 분석 AI입니다.
 목표: 주어진 로그만으로 사건(incident)을 감지하고, 유사 로그를 하나로 묶어(지문/패턴) 요약하며, 영향도·가설·다음 조치·조회용 질의를 제시합니다.
