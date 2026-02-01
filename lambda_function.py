@@ -206,18 +206,31 @@ def lambda_handler(event, context):
         to_iso = now_utc.isoformat().replace('+00:00', 'Z')
         prompt = build_user_prompt(from_iso, to_iso, logs_to_summarize[:15000])
         
-        print(f"Sending {len(unique_logs)} unique abnormal logs to Gemini API.")
+        print(f"Sending {len(unique_logs)} unique abnormal logs to Upstage API.")
         
         summary_text = "요약 생성에 실패했습니다."
         try:
-            gemini_json_str = call_gemini_json(prompt)
-            result = json.loads(gemini_json_str)
-            summary_text = result.get("summary_md", "Gemini가 로그를 분석했지만 요약할 만한 중요 사건을 발견하지 못했습니다.")
+            # Upstage 호출
+            upstage_json_str = call_upstage_json(prompt)
+            result = json.loads(upstage_json_str)
+            summary_text = result.get("summary_md", "Upstage가 로그를 분석했지만 요약할 만한 중요 사건을 발견하지 못했습니다.")
+            
         except (json.JSONDecodeError, Exception) as e:
             print(f"Failed to get structured JSON response: {e}. Falling back to simple summary.")
             fallback_prompt = "다음 로그들을 보고, 현재 발생한 문제 상황을 2~3문장의 자연스러운 한국어로 간단명료하게 요약해줘.\n\n" + logs_to_summarize[:12000]
-            fallback_response = model.generate_content(fallback_prompt)
-            summary_text = fallback_response.text
+            
+            # Fallback 호출 (일반 텍스트)
+            try:
+                fallback_response = client.chat.completions.create(
+                    model="solar-mini",
+                    messages=[
+                        {"role": "system", "content": "You are a helpful SRE assistant."},
+                        {"role": "user", "content": fallback_prompt}
+                    ]
+                )
+                summary_text = fallback_response.choices[0].message.content
+            except Exception as fallback_e:
+                summary_text = f"분석 및 폴백 모두 실패: {fallback_e}"
 
         alert_subject = f"🚨 {kst_start_time.strftime('%H:%M')}~{kst_current_time.strftime('%H:%M')} 비정상 로그 발생"
         
