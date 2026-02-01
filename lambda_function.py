@@ -145,27 +145,31 @@ def lambda_handler(event, context):
         start_time_ns = int(start_utc.timestamp() * 1e9)
         end_time_ns = int(now_utc.timestamp() * 1e9)
 
-        all_error_logs = []
+        all_error_logs = [
+             "[2025-02-01 14:05:10] ERROR s.s.g.security.LogFilter - Database connection failed: Connection timed out",
+             "[2025-02-01 14:05:12] ERROR s.s.g.security.LogFilter - HikariPool-1 - Connection is not available, request timed out after 30000ms",
+             "[2025-02-01 14:06:00] ERROR s.s.g.controller.UserController - Failed to fetch user data: 500 Internal Server Error"
+        ]
         
         include_keywords = "ERROR|failed|500|Exception"
         exclude_keywords = "IllegalArgumentException|AccessDeniedException" 
 
-        for job_label in LOKI_JOB_LABELS_TO_ANALYZE:
-            loki_query = f'{{job="{job_label}"}} |~ "{include_keywords}" !~ "{exclude_keywords}"'
-            url = f"{LOKI_URL}/loki/api/v1/query_range"
-            params = {'query': loki_query, 'start': str(start_time_ns), 'end': str(end_time_ns), 'direction': 'forward', 'limit': 5000}
-            print(f"Querying Loki with adjusted LogQL: {loki_query}")
-            try:
-                response = requests.get(url, params=params, timeout=60)
-                response.raise_for_status()
-                loki_data = response.json()
-                if loki_data['data']['resultType'] == 'streams':
-                    for stream in loki_data['data']['result']:
-                        for entry in stream['values']:
-                            all_error_logs.append(f"[{datetime.datetime.fromtimestamp(int(entry[0]) / 1e9).strftime('%Y-%m-%d %H:%M:%S')}] {entry[1]}")
-            except requests.exceptions.RequestException as e:
-                print(f"Error querying Loki for {job_label}: {e}")
-                continue
+        # for job_label in LOKI_JOB_LABELS_TO_ANALYZE:
+        #     loki_query = f'{{job="{job_label}"}} |~ "{include_keywords}" !~ "{exclude_keywords}"'
+        #     url = f"{LOKI_URL}/loki/api/v1/query_range"
+        #     params = {'query': loki_query, 'start': str(start_time_ns), 'end': str(end_time_ns), 'direction': 'forward', 'limit': 5000}
+        #     print(f"Querying Loki with adjusted LogQL: {loki_query}")
+        #     try:
+        #         response = requests.get(url, params=params, timeout=60)
+        #         response.raise_for_status()
+        #         loki_data = response.json()
+        #         if loki_data['data']['resultType'] == 'streams':
+        #             for stream in loki_data['data']['result']:
+        #                 for entry in stream['values']:
+        #                     all_error_logs.append(f"[{datetime.datetime.fromtimestamp(int(entry[0]) / 1e9).strftime('%Y-%m-%d %H:%M:%S')}] {entry[1]}")
+        #     except requests.exceptions.RequestException as e:
+        #         print(f"Error querying Loki for {job_label}: {e}")
+        #         continue
 
         kst_start_time = start_utc.astimezone(KST)
         kst_current_time = now_utc.astimezone(KST)
