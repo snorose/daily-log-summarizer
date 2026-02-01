@@ -68,7 +68,7 @@ jobs:
           --function-name ${{ vars.LAMBDA_FUNCTION_NAME }} \
           --environment "Variables={ \
             SNS_TOPIC_ARN=${{ vars.SNS_TOPIC_ARN }}, \
-            GEMINI_API_KEY_PARAMETER_NAME=${{ vars.GEMINI_API_KEY_PARAMETER_NAME }}, \
+            UPSTAGE_API_KEY_PARAMETER_NAME=${{ vars.UPSTAGE_API_KEY_PARAMETER_NAME }}, \
             LOKI_URL=${{ vars.LOKI_URL }}, \
             TZ='Asia/Seoul' \
           }"
